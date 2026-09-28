@@ -4,7 +4,9 @@ export {
   DEFAULT_RPC_URLS,
   NETWORK_PASSPHRASES,
   resolveRpcUrl,
+  isSimulationRestore,
 } from "./sdkAdapter";
+export type { SimulationRestore } from "./sdkAdapter";
 
 export type { InvokeContractParams, InvokeContractResult } from "./invoker";
 export { invokeContract, estimateContract } from "./invoker";
@@ -13,6 +15,7 @@ export type {
   SimulateParams,
   SimulationEstimates,
   SimulationResult,
+  SimulationRestorePreamble,
 } from "./simulator";
 export { simulate } from "./simulator";
 
