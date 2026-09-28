@@ -21,6 +21,7 @@ export { decodeReturnValue, decodeScVal } from "./decoder";
 export {
   requiresSigning,
   assertSigningNotRequired,
+  assertAuthNotExpired,
   prepareSignedTransaction,
 } from "./signingPrep";
 export type { SigningContext, AssembledTransaction } from "./signingPrep";
@@ -32,6 +33,7 @@ export {
   SimulationError,
   SimulationErrorResponse,
   AuthRequiredError,
+  AuthExpiredError,
   DecodeError,
   SigningError,
   NetworkMismatchError,
