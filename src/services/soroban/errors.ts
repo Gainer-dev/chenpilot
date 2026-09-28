@@ -11,6 +11,7 @@ export type SorobanErrorCode =
   | "SIMULATION_ERROR_RESPONSE"
   | "AUTH_REQUIRED"
   | "AUTH_EXPIRED"
+  | "AUTH_SCOPE_MISMATCH"
   | "DECODE_FAILED"
   | "SIGNING_FAILED"
   | "NETWORK_MISMATCH"
@@ -177,6 +178,33 @@ export class NetworkMismatchError extends SorobanError {
     this.name = "NetworkMismatchError";
     this.expectedNetwork = opts?.expectedNetwork;
     this.transactionNetwork = opts?.transactionNetwork;
+  }
+}
+
+/**
+ * Raised when the authorization scope a simulation asks the signer to approve
+ * is broader than the call the user actually intended. A contract can call
+ * `require_auth` for a different contract, method, or account than the one
+ * being invoked, which would let a signature authorize an action the user
+ * never saw. This guard compares the simulated auth tree against the approved
+ * intent before any signature is produced.
+ */
+export class AuthScopeMismatchError extends SorobanError {
+  readonly approved: string[];
+  readonly requested: string[];
+
+  constructor(opts: { approved: string[]; requested: string[] }) {
+    const approved = opts.approved.join(", ") || "none";
+    const requested = opts.requested.join(", ") || "none";
+    super(
+      `Refusing to sign: the simulated authorization scope does not match the ` +
+        `approved intent. Approved: [${approved}]. Requested: [${requested}]. ` +
+        `No signature was produced.`,
+      "AUTH_SCOPE_MISMATCH"
+    );
+    this.name = "AuthScopeMismatchError";
+    this.approved = opts.approved;
+    this.requested = opts.requested;
   }
 }
 
