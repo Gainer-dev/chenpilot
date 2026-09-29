@@ -6,15 +6,38 @@ import {
 import { AuditAction, AuditLog } from "../AuditLog/auditLog.entity";
 import { BotSession } from "../Bot/botSession.entity";
 import { contractMetadataRegistry } from "./contracts";
+import {
+  timezoneReportingService,
+  type TimezoneReportQuery,
+  type UTCBoundaries,
+} from "./timezoneReporting.service";
 
 export interface OperatorReportQuery {
   startDate?: Date;
   endDate?: Date;
+
+  /**
+   * Optional timezone-aware query parameters.
+   * When provided, startDate and endDate are ignored and boundaries
+   * are computed from the timezone query.
+   */
+  timezoneQuery?: TimezoneReportQuery;
 }
 
 export interface OperatorReport {
   periodStart: string;
   periodEnd: string;
+
+  /**
+   * Timezone information (populated when timezone query is used).
+   */
+  timezone?: {
+    name: string;
+    periodDescription: string;
+    localStart: string;
+    localEnd: string;
+  };
+
   execution: {
     total: number;
     successRate: number;
@@ -49,9 +72,21 @@ export class OperatorReportingService {
   private botSessionRepository = AppDataSource.getRepository(BotSession);
 
   async buildReport(query: OperatorReportQuery = {}): Promise<OperatorReport> {
-    const periodEnd = query.endDate ?? new Date();
-    const periodStart =
-      query.startDate ?? new Date(periodEnd.getTime() - 24 * 60 * 60 * 1000);
+    let periodEnd: Date;
+    let periodStart: Date;
+    let tzInfo: UTCBoundaries | undefined;
+
+    // If timezone query is provided, compute boundaries from it
+    if (query.timezoneQuery) {
+      tzInfo = timezoneReportingService.computeUTCBoundaries(query.timezoneQuery);
+      periodStart = tzInfo.startUTC;
+      periodEnd = tzInfo.endUTC;
+    } else {
+      // Fall back to existing behavior (UTC-based)
+      periodEnd = query.endDate ?? new Date();
+      periodStart =
+        query.startDate ?? new Date(periodEnd.getTime() - 24 * 60 * 60 * 1000);
+    }
 
     const [execution, audit, botSessions] = await Promise.all([
       this.getExecutionSummary(periodStart, periodEnd),
@@ -76,6 +111,14 @@ export class OperatorReportingService {
     return {
       periodStart: periodStart.toISOString(),
       periodEnd: periodEnd.toISOString(),
+      timezone: tzInfo
+        ? {
+          name: tzInfo.timezone,
+          periodDescription: tzInfo.periodDescription,
+          localStart: tzInfo.startLocal,
+          localEnd: tzInfo.endLocal,
+        }
+        : undefined,
       execution,
       audit,
       botSessions,

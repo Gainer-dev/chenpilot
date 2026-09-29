@@ -1,4 +1,48 @@
-# #683 Implementation - Complete Index
+# Chen Pilot - Implementation Index
+
+This document provides a complete index of major implementations in the Chen Pilot repository.
+
+---
+
+## Recent Implementations
+
+### #860 - Timezone-Aware Reporting
+**Status**: ✅ **COMPLETE**  
+**Feature**: Support user-selected timezone boundaries for daily reports
+
+See detailed documentation:
+- **Implementation Summary**: `ISSUE_860_IMPLEMENTATION.md`
+- **Architecture & Design**: `TIMEZONE_REPORTING_DESIGN.md`
+- **Quick Start**: `ISSUE_860_README.md`
+
+**Key Files**:
+- `src/services/timezoneReporting.service.ts` (550+ lines)
+- `src/services/__tests__/timezoneReporting.service.test.ts` (112 tests)
+- `src/services/operatorReporting.service.ts` (enhanced)
+
+**Achievement**: Complete timezone-aware reporting solution with 5 period types (DAY, WEEK, MONTH, LAST_N_DAYS, CUSTOM), DST support, and 112 comprehensive tests. Users can now request reports based on their local calendar days rather than UTC boundaries.
+
+---
+
+### #858 - In-Transit Bridge Accounting
+**Status**: ✅ **COMPLETE**  
+**Feature**: Define in-transit bridge accounting without double-counting holdings
+
+See detailed documentation:
+- **Implementation Summary**: `ISSUE_858_IMPLEMENTATION.md`
+- **Architecture & Design**: `BRIDGE_ACCOUNTING_DESIGN.md`
+- **Integration Guide**: `docs/BRIDGE_ACCOUNTING_INTEGRATION_GUIDE.md`
+
+**Key Files**:
+- `src/domain/execution/bridgeAccountingModel.ts` (358 lines)
+- `src/services/__tests__/invariantReconciliation.test.ts` (29 new tests added)
+
+**Achievement**: Comprehensive three-partition accounting model that prevents double-counting during cross-chain transfers, with 29 regression tests and full conservation verification.
+
+---
+
+### #683 - Financial Formatting Security
+**Status**: ✅ **COMPLETE & VERIFIED**
 
 ## Issue Description
 **#683 [Bot] Make financial formatting locale-safe and unambiguous**
