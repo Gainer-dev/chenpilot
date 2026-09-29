@@ -1,4 +1,9 @@
 import { SessionManager } from "../sessionManager";
+import {
+  CallbackOrigin,
+  callbackOriginMatches,
+  unpackCallback,
+} from "../callbackUtils";
 
 /**
  * Platform abstraction for bot interactions
@@ -20,6 +25,7 @@ export interface WorkflowState {
   data: Record<string, unknown>;
   isComplete: boolean;
   expiresAt?: Date;
+  originMessageId?: string;
 }
 
 /**
@@ -63,6 +69,7 @@ export class BotWorkflowManager {
   private sessionManager: SessionManager;
   private workflows: Map<string, Workflow> = new Map();
   private activeSessions: Map<string, WorkflowState> = new Map(); // Local cache
+  private callbackOrigins: Map<string, CallbackOrigin> = new Map();
   private backendUrl: string;
 
   constructor(backendUrl?: string) {
@@ -76,6 +83,32 @@ export class BotWorkflowManager {
    */
   registerWorkflow(workflow: Workflow) {
     this.workflows.set(workflow.type, workflow);
+  }
+
+  /** Bind the response message that carries this workflow's callback buttons. */
+  bindWorkflowMessage(
+    userId: string,
+    platform: "discord" | "telegram",
+    messageId: string
+  ): CallbackOrigin | null {
+    const state = this.activeSessions.get(this.getSessionKey(userId, platform));
+    if (!state || state.isComplete || !state.workflowId || !messageId) {
+      return null;
+    }
+
+    if (state.originMessageId) {
+      this.callbackOrigins.delete(
+        this.getMessageKey(platform, state.originMessageId)
+      );
+    }
+    state.originMessageId = messageId;
+    const origin = {
+      userId: state.userId,
+      workflowId: state.workflowId,
+      messageId,
+    };
+    this.callbackOrigins.set(this.getMessageKey(platform, messageId), origin);
+    return origin;
   }
 
   /**
@@ -151,11 +184,13 @@ export class BotWorkflowManager {
 
   /**
    * Process user input for an active workflow
+    * Callback inputs must include the platform-observed ID of their source message.
    */
   async handleInput(
     userId: string,
     platform: "discord" | "telegram",
-    input: string
+    input: string,
+    callbackMessageId?: string
   ): Promise<WorkflowResult | null> {
     const key = this.getSessionKey(userId, platform);
     let state = this.activeSessions.get(key);
@@ -177,9 +212,37 @@ export class BotWorkflowManager {
     const workflow = this.workflows.get(state.type);
     if (!workflow) return null;
 
+    if (unpackCallback(input)) {
+      const callbackMessageKey = callbackMessageId
+        ? this.getMessageKey(platform, callbackMessageId)
+        : undefined;
+      const origin = callbackMessageKey
+        ? this.callbackOrigins.get(callbackMessageKey)
+        : undefined;
+      const actualOrigin = callbackMessageId
+        ? {
+            userId,
+            workflowId: state.workflowId,
+            messageId: callbackMessageId,
+          }
+        : undefined;
+      if (
+        !callbackMessageKey ||
+        !callbackOriginMatches(origin, actualOrigin) ||
+        state.originMessageId !== callbackMessageId
+      ) {
+        return {
+          message: "This button does not belong to your active workflow message.",
+        };
+      }
+      this.callbackOrigins.delete(callbackMessageKey!);
+      state.originMessageId = undefined;
+    }
+
     const trimmedInput = input.trim().toLowerCase();
     if (["cancel", "abort", "exit"].includes(trimmedInput)) {
       await this.sessionManager.deactivateSession(state.workflowId);
+      this.clearWorkflowCallbackOrigins(platform, state);
       this.activeSessions.delete(key);
       return {
         message: `❌ ${state.type} workflow cancelled.`,
@@ -188,6 +251,10 @@ export class BotWorkflowManager {
     }
 
     const result = await workflow.processInput(state, input);
+
+    if (result.isComplete || result.nextStep !== undefined) {
+      this.clearWorkflowCallbackOrigins(platform, state);
+    }
 
     // Update state
     state.step = result.nextStep ?? state.step;
@@ -205,6 +272,7 @@ export class BotWorkflowManager {
     });
 
     if (state.isComplete) {
+      this.clearWorkflowCallbackOrigins(platform, state);
       this.activeSessions.delete(key);
     }
 
@@ -288,6 +356,24 @@ export class BotWorkflowManager {
     platform: "discord" | "telegram"
   ): string {
     return `${platform}:${userId}`;
+  }
+
+  private getMessageKey(
+    platform: "discord" | "telegram",
+    messageId: string
+  ): string {
+    return `${platform}:${messageId}`;
+  }
+
+  private clearWorkflowCallbackOrigins(
+    platform: "discord" | "telegram",
+    state: WorkflowState
+  ): void {
+    if (!state.originMessageId) return;
+    this.callbackOrigins.delete(
+      this.getMessageKey(platform, state.originMessageId)
+    );
+    state.originMessageId = undefined;
   }
 }
 

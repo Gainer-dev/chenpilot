@@ -5,6 +5,7 @@ import {
   unpackCallback,
   inlineBtn,
   inlineKeyboard,
+  callbackOriginMatches,
 } from "../callbackUtils";
 
 describe("callbackUtils", () => {
@@ -79,6 +80,28 @@ describe("callbackUtils", () => {
           inline_keyboard: [[btn]],
         },
       });
+    });
+  });
+
+  describe("workflow callback origin", () => {
+    const origin = {
+      userId: "user-1",
+      workflowId: "workflow-1",
+      messageId: "message-1",
+    };
+
+    it("accepts only the originating user, workflow, and message", () => {
+      expect(callbackOriginMatches(origin, { ...origin })).toBe(true);
+      expect(
+        callbackOriginMatches(origin, { ...origin, userId: "user-2" })
+      ).toBe(false);
+      expect(
+        callbackOriginMatches(origin, { ...origin, workflowId: "workflow-2" })
+      ).toBe(false);
+      expect(
+        callbackOriginMatches(origin, { ...origin, messageId: "message-2" })
+      ).toBe(false);
+      expect(callbackOriginMatches(origin, undefined)).toBe(false);
     });
   });
 });

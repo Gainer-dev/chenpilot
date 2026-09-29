@@ -41,6 +41,10 @@ jobs:
         working-directory: packages/sdk
         run: npm run build
 
+      - name: Run selected public quick-start examples
+        working-directory: packages/sdk
+        run: npm run test:examples
+
       - name: Run runtime contract tests
         working-directory: packages/sdk
         run: npm run test:contract

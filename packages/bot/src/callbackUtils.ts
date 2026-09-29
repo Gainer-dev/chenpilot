@@ -19,6 +19,25 @@ export interface TypedCallback<T = Record<string, unknown>> {
   payload?: T;
 }
 
+export interface CallbackOrigin {
+  userId: string;
+  workflowId: string;
+  messageId: string;
+}
+
+export function callbackOriginMatches(
+  expected: CallbackOrigin | undefined,
+  actual: CallbackOrigin | undefined
+): boolean {
+  return Boolean(
+    expected &&
+      actual &&
+      expected.userId === actual.userId &&
+      expected.workflowId === actual.workflowId &&
+      expected.messageId === actual.messageId
+  );
+}
+
 const SEP = ":";
 const MAX_CALLBACK_BYTES = 64;
 
