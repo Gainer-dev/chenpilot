@@ -10,6 +10,7 @@ export type SorobanErrorCode =
   | "SIMULATION_FAILED"
   | "SIMULATION_ERROR_RESPONSE"
   | "AUTH_REQUIRED"
+  | "AUTH_EXPIRED"
   | "DECODE_FAILED"
   | "SIGNING_FAILED"
   | "NETWORK_MISMATCH"
@@ -128,6 +129,13 @@ export class AuthRequiredError extends SorobanError {
       "AUTH_REQUIRED"
     );
     this.name = "AuthRequiredError";
+  }
+}
+
+export class AuthExpiredError extends SorobanError {
+  constructor(message: string) {
+    super(message, "AUTH_EXPIRED");
+    this.name = "AuthExpiredError";
   }
 }
 
