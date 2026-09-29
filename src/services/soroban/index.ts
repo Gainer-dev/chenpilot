@@ -22,9 +22,14 @@ export {
   requiresSigning,
   assertSigningNotRequired,
   assertAuthNotExpired,
+  assertAuthScopeMatches,
   prepareSignedTransaction,
 } from "./signingPrep";
-export type { SigningContext, AssembledTransaction } from "./signingPrep";
+export type {
+  SigningContext,
+  AssembledTransaction,
+  ApprovedAuthScope,
+} from "./signingPrep";
 
 export {
   SorobanError,
@@ -34,6 +39,7 @@ export {
   SimulationErrorResponse,
   AuthRequiredError,
   AuthExpiredError,
+  AuthScopeMismatchError,
   DecodeError,
   SigningError,
   NetworkMismatchError,

@@ -1,9 +1,13 @@
 import * as StellarSdk from "@stellar/stellar-sdk";
 import {
   assertAuthNotExpired,
+  assertAuthScopeMatches,
   prepareSignedTransaction,
 } from "../../src/services/soroban/signingPrep";
-import { AuthExpiredError } from "../../src/services/soroban/errors";
+import {
+  AuthExpiredError,
+  AuthScopeMismatchError,
+} from "../../src/services/soroban/errors";
 import type { SimulationSuccess } from "../../src/services/soroban/sdkAdapter";
 
 const TEST_CONTRACT_ID = "CABC1234567890";
@@ -290,6 +294,292 @@ describe("Soroban signingPrep auth expiry", () => {
       const result = prepareSignedTransaction(
         unsignedTx,
         simWith([xdrEntry(90)]),
+        context
+      );
+
+      expect(assembleTransaction).toHaveBeenCalled();
+      expect(result.signedXdr).toBe("base64_xdr");
+    });
+  });
+});
+
+describe("Soroban signingPrep auth scope", () => {
+  const VAULT = "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM";
+  const ROUTER = "CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBE4PQ";
+  const approved = { contractId: VAULT, method: "swap" };
+
+  // Raw XDR simulation shape: an invocation node in the authorization tree.
+  const invocationFor = (
+    contractId: string,
+    method: string,
+    subInvocations: unknown[] = []
+  ): unknown => ({
+    function: { contractAddress: contractId, functionName: method, args: [] },
+    subInvocations,
+  });
+
+  // One auth entry whose root invocation is `contractId.method`.
+  const entryFor = (
+    contractId: string,
+    method: string,
+    subInvocations: unknown[] = []
+  ): unknown => ({
+    credentials: { sourceAccount: { address: "GUSER" } },
+    rootInvocation: invocationFor(contractId, method, subInvocations),
+  });
+
+  it("accepts a tree that matches the approved intent", () => {
+    const sim: SimulationSuccess = {
+      result: { auth: [entryFor(VAULT, "swap")] },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).not.toThrow();
+  });
+
+  it("rejects a different contract than the one approved", () => {
+    const sim: SimulationSuccess = {
+      result: { auth: [entryFor(ROUTER, "swap")] },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).toThrow(
+      AuthScopeMismatchError
+    );
+  });
+
+  it("rejects a different method than the one approved", () => {
+    const sim: SimulationSuccess = {
+      result: { auth: [entryFor(VAULT, "withdraw_all")] },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).toThrow(
+      AuthScopeMismatchError
+    );
+  });
+
+  it("rejects escalation hidden in a nested sub-invocation", () => {
+    // The root looks exactly like the approved call, but it nests a transfer
+    // to a different contract — the escalation the check exists to catch.
+    const sim: SimulationSuccess = {
+      result: {
+        auth: [entryFor(VAULT, "swap", [invocationFor(ROUTER, "transfer")])],
+      },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).toThrow(
+      AuthScopeMismatchError
+    );
+  });
+
+  it("reports the escalating target in the error", () => {
+    const sim: SimulationSuccess = {
+      result: {
+        auth: [entryFor(VAULT, "swap", [invocationFor(ROUTER, "transfer")])],
+      },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).toThrow(
+      `${ROUTER}:transfer`
+    );
+  });
+
+  it("carries the approved and requested scopes on the error", () => {
+    const sim: SimulationSuccess = {
+      result: { auth: [entryFor(ROUTER, "swap")] },
+    };
+    try {
+      assertAuthScopeMatches(sim, approved);
+      throw new Error("expected assertAuthScopeMatches to throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthScopeMismatchError);
+      const e = err as AuthScopeMismatchError;
+      expect(e.code).toBe("AUTH_SCOPE_MISMATCH");
+      expect(e.approved).toEqual([`${VAULT}:swap`]);
+      expect(e.requested).toEqual([`${ROUTER}:swap`]);
+    }
+  });
+
+  it("accepts explicitly allowed cross-contract targets", () => {
+    const sim: SimulationSuccess = {
+      result: {
+        auth: [entryFor(VAULT, "swap", [invocationFor(ROUTER, "transfer")])],
+      },
+    };
+    expect(() =>
+      assertAuthScopeMatches(sim, {
+        ...approved,
+        allowedTargets: [`${ROUTER}:transfer`],
+      })
+    ).not.toThrow();
+  });
+
+  it("still rejects an unlisted target when allowlist entries exist", () => {
+    const sim: SimulationSuccess = {
+      result: {
+        auth: [entryFor(VAULT, "swap", [invocationFor(ROUTER, "burn")])],
+      },
+    };
+    expect(() =>
+      assertAuthScopeMatches(sim, {
+        ...approved,
+        allowedTargets: [`${ROUTER}:transfer`],
+      })
+    ).toThrow(AuthScopeMismatchError);
+  });
+
+  it("accepts multiple entries that all match the approved intent", () => {
+    const sim: SimulationSuccess = {
+      result: { auth: [entryFor(VAULT, "swap"), entryFor(VAULT, "swap")] },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).not.toThrow();
+  });
+
+  it("rejects when one of several entries escalates", () => {
+    const sim: SimulationSuccess = {
+      result: { auth: [entryFor(VAULT, "swap"), entryFor(ROUTER, "drain")] },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).toThrow(
+      AuthScopeMismatchError
+    );
+  });
+
+  it("strips the XDR NUL terminator from function names", () => {
+    const sim: SimulationSuccess = {
+      result: { auth: [entryFor(VAULT, "swap\0")] },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).not.toThrow();
+  });
+
+  it("reads the SDK accessor shape via address().authorization()", () => {
+    const root = {
+      function: () => ({
+        contractAddress: VAULT,
+        functionName: "swap",
+        args: [],
+      }),
+      subInvocations: () => [],
+    };
+    const entry = {
+      address: () => ({
+        authorization: () => [{ rootInvocation: () => root }],
+      }),
+    };
+    const sim: SimulationSuccess = { result: { auth: [entry] } };
+    expect(() => assertAuthScopeMatches(sim, approved)).not.toThrow();
+  });
+
+  it("rejects an escalation in the SDK accessor shape", () => {
+    const sub = {
+      function: () => ({
+        contractAddress: ROUTER,
+        functionName: "transfer",
+        args: [],
+      }),
+      subInvocations: () => [],
+    };
+    const root = {
+      function: () => ({
+        contractAddress: VAULT,
+        functionName: "swap",
+        args: [],
+      }),
+      subInvocations: () => [sub],
+    };
+    const entry = {
+      address: () => ({
+        authorization: () => [{ rootInvocation: () => root }],
+      }),
+    };
+    const sim: SimulationSuccess = { result: { auth: [entry] } };
+    expect(() => assertAuthScopeMatches(sim, approved)).toThrow(
+      AuthScopeMismatchError
+    );
+  });
+
+  it("is a no-op when the simulation carries no auth entries", () => {
+    expect(() =>
+      assertAuthScopeMatches({ result: { auth: [] } }, approved)
+    ).not.toThrow();
+    expect(() =>
+      assertAuthScopeMatches({ result: {} }, approved)
+    ).not.toThrow();
+  });
+
+  it("ignores entries whose invocation tree cannot be read", () => {
+    const sim: SimulationSuccess = {
+      result: { auth: [{}, { rootInvocation: {} }, { rootInvocation: 5 }] },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).not.toThrow();
+  });
+
+  it("stops traversing a pathologically deep tree", () => {
+    let node: unknown = invocationFor(ROUTER, "transfer");
+    for (let i = 0; i < 200; i++) {
+      node = invocationFor(VAULT, "swap", [node]);
+    }
+    const sim: SimulationSuccess = {
+      result: { auth: [entryFor(VAULT, "swap", [node])] },
+    };
+    // The escalation is buried past the traversal bound and is not inspected.
+    expect(() => assertAuthScopeMatches(sim, approved)).not.toThrow();
+  });
+
+  it("still catches an escalation within the traversal bound", () => {
+    let node: unknown = invocationFor(ROUTER, "transfer");
+    for (let i = 0; i < 5; i++) {
+      node = invocationFor(VAULT, "swap", [node]);
+    }
+    const sim: SimulationSuccess = {
+      result: { auth: [entryFor(VAULT, "swap", [node])] },
+    };
+    expect(() => assertAuthScopeMatches(sim, approved)).toThrow(
+      AuthScopeMismatchError
+    );
+  });
+
+  describe("prepareSignedTransaction", () => {
+    const unsignedTx = { type: "mock_tx" } as unknown as StellarSdk.Transaction;
+    const context = {
+      network: "testnet" as const,
+      secretKey: "SABC...MOCKSECRET",
+    };
+
+    const assembleTransaction = jest.fn(() => ({
+      sign: jest.fn(),
+      toEnvelope: () => ({ toXDR: () => "base64_xdr" }),
+    }));
+
+    beforeAll(() => {
+      (StellarSdk.SorobanRpc as unknown as Record<string, unknown>)[
+        "assembleTransaction"
+      ] = assembleTransaction;
+    });
+
+    beforeEach(() => {
+      assembleTransaction.mockClear();
+    });
+
+    it("does not sign when the auth scope exceeds the approved intent", () => {
+      expect(() =>
+        prepareSignedTransaction(
+          unsignedTx,
+          { result: { auth: [entryFor(ROUTER, "swap")] } },
+          { ...context, approvedIntent: approved }
+        )
+      ).toThrow(AuthScopeMismatchError);
+
+      expect(assembleTransaction).not.toHaveBeenCalled();
+    });
+
+    it("signs when the auth scope matches the approved intent", () => {
+      const result = prepareSignedTransaction(
+        unsignedTx,
+        { result: { auth: [entryFor(VAULT, "swap")] } },
+        { ...context, approvedIntent: approved }
+      );
+
+      expect(assembleTransaction).toHaveBeenCalled();
+      expect(result.signedXdr).toBe("base64_xdr");
+    });
+
+    it("preserves existing behavior when no approved intent is supplied", () => {
+      const result = prepareSignedTransaction(
+        unsignedTx,
+        { result: { auth: [entryFor(ROUTER, "swap")] } },
         context
       );
 
