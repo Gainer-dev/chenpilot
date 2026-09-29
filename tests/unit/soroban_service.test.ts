@@ -8,6 +8,8 @@ import {
   AuthExpiredError,
   AuthScopeMismatchError,
 } from "../../src/services/soroban/errors";
+import { isSimulationRestore } from "../../src/services/soroban/sdkAdapter";
+import { simulate } from "../../src/services/soroban/simulator";
 import type { SimulationSuccess } from "../../src/services/soroban/sdkAdapter";
 
 const TEST_CONTRACT_ID = "CABC1234567890";
@@ -585,6 +587,135 @@ describe("Soroban signingPrep auth scope", () => {
 
       expect(assembleTransaction).toHaveBeenCalled();
       expect(result.signedXdr).toBe("base64_xdr");
+    });
+  });
+});
+
+describe("Soroban simulator restore-required outcomes", () => {
+  // A restore-required response is a success that also carries a preamble:
+  // the RPC ran the call "as if" the expired footprint entries existed.
+  const restoreResponse = (data: unknown = "restore_xdr") => ({
+    result: { retval: "mock_scval" },
+    minResourceFee: "100",
+    transactionData: "sim_xdr",
+    restorePreamble: { minResourceFee: "250", transactionData: data },
+  });
+
+  // Drive simulate() by swapping the RPC server's simulation response.
+  const withSimResponse = async (
+    response: unknown,
+    fn: () => Promise<void>
+  ): Promise<void> => {
+    const Server = (StellarSdk.SorobanRpc as unknown as { Server: jest.Mock })
+      .Server;
+    const original = Server.getMockImplementation();
+    Server.mockImplementation(() => ({
+      simulateTransaction: jest.fn().mockResolvedValue(response),
+    }));
+    try {
+      await fn();
+    } finally {
+      Server.mockImplementation(original as never);
+    }
+  };
+
+  describe("isSimulationRestore", () => {
+    it("detects a response carrying a restore preamble", () => {
+      expect(isSimulationRestore(restoreResponse())).toBe(true);
+    });
+
+    it("returns false for a plain success", () => {
+      expect(isSimulationRestore({ result: { retval: "mock_scval" } })).toBe(
+        false
+      );
+    });
+
+    it("returns false for a simulation error", () => {
+      expect(isSimulationRestore({ error: "boom" })).toBe(false);
+    });
+
+    it("returns false when the preamble is null", () => {
+      expect(
+        isSimulationRestore({
+          result: {},
+          transactionData: "sim_xdr",
+          restorePreamble: null,
+        })
+      ).toBe(false);
+    });
+
+    it("returns false when the preamble carries no transaction data", () => {
+      expect(
+        isSimulationRestore({
+          result: {},
+          transactionData: "sim_xdr",
+          restorePreamble: { minResourceFee: "250" },
+        })
+      ).toBe(false);
+    });
+  });
+
+  describe("simulate", () => {
+    const params = {
+      network: "testnet" as const,
+      contractId: TEST_CONTRACT_ID,
+      method: "ping",
+    };
+
+    it("returns restoreRequired with the preamble when restoration is needed", async () => {
+      await withSimResponse(restoreResponse(), async () => {
+        const result = await simulate(params);
+        expect(result.restoreRequired).toBe(true);
+        expect(result.restorePreamble).toEqual({
+          minResourceFee: "250",
+          transactionDataXdr: "restore_xdr",
+        });
+      });
+    });
+
+    it("serializes a SorobanDataBuilder preamble to XDR", async () => {
+      const builder = { toXDR: () => "builder_xdr" };
+      await withSimResponse(restoreResponse(builder), async () => {
+        const result = await simulate(params);
+        expect(result.restorePreamble?.transactionDataXdr).toBe("builder_xdr");
+      });
+    });
+
+    it("still flags restoreRequired when the preamble cannot be serialized", async () => {
+      const builder = {
+        toXDR: () => {
+          throw new Error("xdr failed");
+        },
+      };
+      await withSimResponse(restoreResponse(builder), async () => {
+        const result = await simulate(params);
+        expect(result.restoreRequired).toBe(true);
+        expect(result.restorePreamble?.transactionDataXdr).toBeUndefined();
+        expect(result.restorePreamble?.minResourceFee).toBe("250");
+      });
+    });
+
+    it("omits restore fields for a plain success", async () => {
+      await withSimResponse({ result: { retval: "mock_scval" } }, async () => {
+        const result = await simulate(params);
+        expect(result.restoreRequired).toBeUndefined();
+        expect(result.restorePreamble).toBeUndefined();
+      });
+    });
+
+    it("still returns the raw result and auth entries alongside the preamble", async () => {
+      await withSimResponse(restoreResponse(), async () => {
+        const result = await simulate(params);
+        expect(result.raw).toBeDefined();
+        expect(Array.isArray(result.authEntries)).toBe(true);
+        expect(result.invocation.contractId).toBe(TEST_CONTRACT_ID);
+      });
+    });
+
+    it("does not report restoreRequired for a simulation error", async () => {
+      await withSimResponse({ error: "contract panicked" }, async () => {
+        await expect(simulate(params)).rejects.toThrow();
+      });
     });
   });
 });
